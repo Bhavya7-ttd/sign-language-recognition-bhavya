@@ -1,12 +1,12 @@
 # 🤟 Real-Time Sign Language Gesture Recognition System
 
-A real-time computer vision and deep learning application that recognizes **American Sign Language (ASL)** hand gestures from a webcam feed and converts them into text, word suggestions, and spoken audio (Text-to-Speech).
+A real-time computer vision and deep learning desktop application that recognizes **American Sign Language (ASL)** hand gestures from a webcam feed and converts them into text, word suggestions, and spoken audio (Text-to-Speech).
 
 ---
 
 ## 📌 Overview
 
-This project provides an end-to-end pipeline for recognizing ASL alphabets (A–Z) and control gestures in real time. It utilizes **MediaPipe** for 21 3D hand landmark extraction, standardizes coordinates onto a normalized skeleton canvas via a unified preprocessing pipeline, classifies gestures using a **8-group Convolutional Neural Network (CNN)** paired with landmark geometric rules, and features a responsive **Tkinter Graphical User Interface (GUI)** as well as a **Command Line Interface (CLI)**.
+This project provides an end-to-end pipeline for recognizing ASL alphabets (A–Z) and control gestures in real time. It utilizes **MediaPipe** for 21 3D hand landmark extraction, standardizes coordinates onto a normalized skeleton canvas via a unified preprocessing pipeline, classifies gestures using an **8-group Convolutional Neural Network (CNN)** paired with landmark geometric rules, and features a responsive **Tkinter Graphical User Interface (GUI)** as well as a **Command Line Interface (CLI)**.
 
 ---
 
@@ -25,7 +25,7 @@ This project provides an end-to-end pipeline for recognizing ASL alphabets (A–
 
 ---
 
-## 🏗️ System Pipeline Architecture
+## 🏗️ System Pipeline
 
 ```text
   Webcam Video Feed
@@ -51,7 +51,7 @@ Text-to-Speech (pyttsx3 Audio Output)
 
 ---
 
-## 🧠 Technologies Used
+## 🧠 Technologies
 
 | Technology | Role / Purpose |
 | :--- | :--- |
@@ -72,22 +72,25 @@ Text-to-Speech (pyttsx3 Audio Output)
 ```text
 Sign-Language-Recognition/
 │
-├── AtoZ_3.1/                       # Dataset directory (A-Z subfolders)
-│
+├── AtoZ_3.1/                       # Dataset directory containing A-Z subfolders
 ├── Gesture detection/               # Gesture detection module and helper assets
 │
-├── cnn8grps_rad1_model.h5          # Trained 8-group CNN model weights
-├── hand_landmarker.task             # MediaPipe hand landmarker task file
+├── cnn8grps_rad1_model.h5          # Trained 8-group CNN model weights file
+├── hand_landmarker.task             # MediaPipe hand landmarker task model
 │
-├── collect_data_binary_images.py   # Dataset image collection utility
-├── collect_data_skeleton.py        # Skeleton canvas collection utility
-├── sign_language_cli.py            # Command Line Interface (CLI) recognition runner
-├── sign_language_gui.py            # Main Interactive Graphical User Interface (GUI)
+├── preprocessing.py                # Unified landmark & canvas preprocessing module
+├── sign_language_gui.py            # Main Interactive Desktop Graphical User Interface
+├── sign_language_cli.py            # Command Line Interface recognition runner
+├── collect_data_binary_images.py   # Binary image dataset collection tool
+├── collect_data_skeleton.py        # Skeleton canvas dataset collection tool
+├── train.py                        # CNN model training script
+├── evaluate.py                     # Model evaluation script
 ├── test_hand_tracking.py           # Quick MediaPipe webcam diagnostic test script
 │
+├── requirements.txt                # Pinned project dependency list
 ├── README.md                       # Project documentation
-├── .gitignore                      # Git ignore file
-└── demo.mp4                        # Video demonstration recording
+├── .gitignore                      # Git ignore rules
+└── demo.mp4                        # Project screen recording video
 ```
 
 ---
@@ -142,13 +145,23 @@ python evaluate.py
 
 ---
 
-## 🤟 Gesture Control Reference
+## 🤟 Gesture Controls
 
 | Action | Physical Hand Gesture | GUI Button Alternative |
 | :--- | :--- | :--- |
 | **Space (`" "`)** | Index & Pinky fingers UP (Middle & Ring folded down) | Click **`Space ␣`** |
 | **Next / Commit (`"next"`)** | Open Palm (All 5 fingers extended UP) | Click **`Next`** |
 | **Backspace (`"Backspace"`)** | Hand turned sideways (Fingers pointing left) | Click **`Backspace ⌫`** |
+
+---
+
+## 📊 Model Evaluation
+
+The model was evaluated using a stratified 20% held-out dataset split containing **935 images** across all 26 ASL alphabet categories.
+
+**Held-Out Test Accuracy: 100% (935/935 correct predictions)**
+
+> **Note:** This result represents performance on the evaluated dataset split and should not be interpreted as 100% real-world accuracy across all unconstrained environments.
 
 ---
 
