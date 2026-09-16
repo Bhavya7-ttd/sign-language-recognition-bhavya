@@ -4,6 +4,7 @@ from cvzone.HandTrackingModule import HandDetector
 import numpy as np
 from keras.models import load_model
 import traceback
+from preprocessing import draw_skeleton_canvas
 
 
 # ============================================================
@@ -124,211 +125,20 @@ while True:
 
             hand = hands[0]
 
-            # ------------------------------------------------
-            # HAND INFORMATION
-            # ------------------------------------------------
-
-            x, y, w, h = hand["bbox"]
-
-            pts_original = hand["lmList"]
-
-            print("Bounding box:", hand["bbox"])
-            print("Hand type:", hand.get("type", "Unknown"))
-            print("Landmarks:", len(pts_original))
-
-
-            # ------------------------------------------------
-            # CHECK LANDMARK COUNT
-            # ------------------------------------------------
-
+            pts_original = hand.get("lmList", [])
             if len(pts_original) < 21:
                 print("Invalid landmark count:", len(pts_original))
                 continue
 
+            white, pts = draw_skeleton_canvas(hand, frame.shape, offset=offset)
 
-            # ------------------------------------------------
-            # SAFE CROP
-            # ------------------------------------------------
-
-            y1 = max(0, y - offset)
-            y2 = min(frame.shape[0], y + h + offset)
-
-            x1 = max(0, x - offset)
-            x2 = min(frame.shape[1], x + w + offset)
-
-            image = frame[y1:y2, x1:x2]
-
-
-            if image.size == 0:
-
-                print("Empty crop")
-
-                cv2.imshow("frame", frame)
-
-                if cv2.waitKey(1) & 0xFF == 27:
-                    break
-
+            if not pts:
+                print("Empty crop or invalid bounds")
                 continue
-
-
-            # ------------------------------------------------
-            # IMPORTANT:
-            # Convert original-frame landmarks into
-            # crop-image coordinates.
-            # ------------------------------------------------
-
-            pts = []
-
-            for p in pts_original:
-
-                px = p[0] - x1
-                py = p[1] - y1
-                pz = p[2]
-
-                pts.append([
-                    px,
-                    py,
-                    pz
-                ])
-
-
-            # ------------------------------------------------
-            # WHITE CANVAS
-            # ------------------------------------------------
-
-            white = np.ones(
-                (400, 400, 3),
-                np.uint8
-            ) * 255
-
-
-            # ------------------------------------------------
-            # SCALE HAND TO 400x400
-            # ------------------------------------------------
-
-            crop_h, crop_w = image.shape[:2]
-
-            scale = min(
-                350.0 / max(crop_w, 1),
-                350.0 / max(crop_h, 1)
-            )
-
-            new_w = int(crop_w * scale)
-            new_h = int(crop_h * scale)
-
-            offset_x = (400 - new_w) // 2
-            offset_y = (400 - new_h) // 2
-
-
-            # ------------------------------------------------
-            # TRANSFORM LANDMARKS
-            # ------------------------------------------------
-
-            transformed_pts = []
-
-            for p in pts:
-
-                px = int(
-                    p[0] * scale + offset_x
-                )
-
-                py = int(
-                    p[1] * scale + offset_y
-                )
-
-                transformed_pts.append([
-                    px,
-                    py,
-                    p[2]
-                ])
-
-            pts = transformed_pts
-
-
-            # ------------------------------------------------
-            # DRAW FINGER LINES
-            # ------------------------------------------------
-
-            connections = [
-
-                # Thumb
-                (0, 1),
-                (1, 2),
-                (2, 3),
-                (3, 4),
-
-                # Index
-                (5, 6),
-                (6, 7),
-                (7, 8),
-
-                # Middle
-                (9, 10),
-                (10, 11),
-                (11, 12),
-
-                # Ring
-                (13, 14),
-                (14, 15),
-                (15, 16),
-
-                # Little
-                (17, 18),
-                (18, 19),
-                (19, 20),
-
-                # Palm
-                (5, 9),
-                (9, 13),
-                (13, 17),
-                (0, 5),
-                (0, 17)
-            ]
-
-
-            for a, b in connections:
-
-                cv2.line(
-                    white,
-                    (
-                        pts[a][0],
-                        pts[a][1]
-                    ),
-                    (
-                        pts[b][0],
-                        pts[b][1]
-                    ),
-                    (0, 255, 0),
-                    3
-                )
-
-
-            # ------------------------------------------------
-            # DRAW LANDMARK POINTS
-            # ------------------------------------------------
-
-            for i in range(21):
-
-                px = pts[i][0]
-                py = pts[i][1]
-
-                if (
-                    0 <= px < 400
-                    and
-                    0 <= py < 400
-                ):
-
-                    cv2.circle(
-                        white,
-                        (px, py),
-                        4,
-                        (0, 0, 255),
-                        -1
-                    )
-
 
             # Show skeleton
             cv2.imshow("2", white)
+
 
 
             # =================================================

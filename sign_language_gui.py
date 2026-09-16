@@ -1,4 +1,4 @@
-# Importing Libraries
+import time
 import numpy as np
 import math
 import cv2
@@ -9,8 +9,11 @@ from keras.models import load_model
 from cvzone.HandTrackingModule import HandDetector
 from string import ascii_uppercase
 import tkinter as tk
+import tkinter.messagebox as mb
 from PIL import Image, ImageTk
 import threading
+from preprocessing import draw_skeleton_canvas
+
 
 try:
     import enchant
@@ -29,11 +32,32 @@ os.environ["THEANO_FLAGS"] = "device=cuda, assert_no_cpu_op=True"
 class Application:
 
     def __init__(self):
-        self.vs = cv2.VideoCapture(0)
+        self.vs = None
+        self.webcam_running = False
         self.current_image = None
-        self.model = load_model('cnn8grps_rad1_model.h5')
         self.staged_char = None
         
+        # Priority 6: Model Error Handling
+        model_file = 'cnn8grps_rad1_model.h5'
+        if not os.path.exists(model_file):
+            print(f"ERROR: Model file '{model_file}' not found.")
+            mb.showerror("Model Error", f"Model file '{model_file}' was not found in the project directory.\nPlease ensure the .h5 file is in the project folder.")
+            sys.exit(1)
+
+        try:
+            self.model = load_model(model_file)
+            print("Loaded model from disk successfully.")
+        except Exception as e:
+            print("ERROR: Failed to load model:", e)
+            mb.showerror("Model Load Error", f"Failed to load model file '{model_file}':\n{e}")
+            sys.exit(1)
+
+        # Priority 4 & 5: Confidence & FPS Tracking Variables
+        self.confidence_threshold = 40.0
+        self.last_confidence = 0.0
+        self.prev_time = time.perf_counter()
+        self.fps = 0.0
+
         # Safe text-to-speech initialization using non-blocking manual loop
         try:
             self.engine = pyttsx3.init()
@@ -50,18 +74,18 @@ class Application:
         self.ct = {}
         self.ct['blank'] = 0
         self.blank_flag = 0
-        self.space_flag=False
-        self.next_flag=True
-        self.prev_char=""
-        self.count=-1
-        self.ten_prev_char=[]
+        self.space_flag = False
+        self.next_flag = True
+        self.prev_char = ""
+        self.count = -1
+        self.ten_prev_char = []
         for i in range(10):
             self.ten_prev_char.append(" ")
 
         for i in ascii_uppercase:
             self.ct[i] = 0
 
-        # Hand detector setup (configured to match test_hand.py)
+        # Hand detector setup
         self.hd = HandDetector(
             staticMode=False,
             maxHands=1,
@@ -78,8 +102,6 @@ class Application:
 
         # Local words fallback
         self.local_words = ["HELLO", "HELP", "HELMET", "HELICOPTER", "WORLD", "WORK", "WORD", "WELCOME", "SIGN", "LANGUAGE", "PROJECT", "TEST", "PLEASE", "THANK", "YOU", "DEAF", "GOOD", "MORNING", "AFTERNOON", "NIGHT", "FRIEND", "FAMILY", "HOME", "SCHOOL", "YES", "NO", "NAME", "WHAT", "HOW", "WHO", "WHY", "WHERE", "WHEN"]
-
-        print("Loaded model from disk")
 
         # Root Window Setup
         self.root = tk.Tk()
@@ -101,12 +123,16 @@ class Application:
         font_body = ("Helvetica", 12)
         font_display = ("Consolas", 20, "bold")
 
-        # 1. Header Frame
+        # 1. Header Frame with FPS Counter
         header_frame = tk.Frame(self.root, bg=bg_main, pady=10)
         header_frame.pack(fill=tk.X)
         
         title_label = tk.Label(header_frame, text="Sign Language To Text Conversion", font=font_title, fg=fg_text, bg=bg_main)
-        title_label.pack()
+        title_label.pack(side=tk.LEFT, padx=20)
+
+        # Priority 5: Real-time FPS Label
+        self.fps_label = tk.Label(header_frame, text="FPS: 0.0", font=("Helvetica", 14, "bold"), fg=fg_success, bg=bg_main)
+        self.fps_label.pack(side=tk.RIGHT, padx=20)
 
         # 3. Control Panel (Sentence, Suggestions, Buttons)
         control_frame = tk.Frame(self.root, bg=bg_card, bd=1, relief=tk.SOLID, padx=20, pady=15)
@@ -137,12 +163,13 @@ class Application:
         char_label = tk.Label(info_row, text="Detected Sign: ", font=font_header, fg=fg_accent, bg=bg_card)
         char_label.pack(side=tk.LEFT)
 
-        self.panel3 = tk.Label(info_row, text="-", font=("Helvetica", 20, "bold"), fg=fg_success, bg=bg_card)
+        # Priority 4: Display character and confidence percentage
+        self.panel3 = tk.Label(info_row, text="-", font=("Helvetica", 18, "bold"), fg=fg_success, bg=bg_card)
         self.panel3.pack(side=tk.LEFT, padx=10)
 
         # Stability Slider
         slider_frame = tk.Frame(info_row, bg=bg_card)
-        slider_frame.pack(side=tk.RIGHT)
+        slider_frame.pack(side=tk.RIGHT, padx=5)
         
         slider_label = tk.Label(slider_frame, text="Stability (Frames): ", font=font_body, fg=fg_text, bg=bg_card)
         slider_label.pack(side=tk.LEFT)
@@ -151,6 +178,18 @@ class Application:
                                          highlightthickness=0, troughcolor="#444455", activebackground=fg_accent)
         self.stability_slider.set(self.stability_threshold)
         self.stability_slider.pack(side=tk.LEFT, padx=5)
+
+        # Priority 4: Configurable Confidence Threshold Slider
+        conf_frame = tk.Frame(info_row, bg=bg_card)
+        conf_frame.pack(side=tk.RIGHT, padx=15)
+
+        conf_label = tk.Label(conf_frame, text="Min Conf (%): ", font=font_body, fg=fg_text, bg=bg_card)
+        conf_label.pack(side=tk.LEFT)
+
+        self.conf_slider = tk.Scale(conf_frame, from_=0, to=100, orient=tk.HORIZONTAL, bg=bg_card, fg=fg_text,
+                                    highlightthickness=0, troughcolor="#444455", activebackground=fg_accent)
+        self.conf_slider.set(self.confidence_threshold)
+        self.conf_slider.pack(side=tk.LEFT, padx=5)
 
         # Sentence Box Row
         sentence_row = tk.Frame(control_frame, bg=bg_card, pady=5)
@@ -186,6 +225,13 @@ class Application:
         actions_row = tk.Frame(control_frame, bg=bg_card, pady=5)
         actions_row.pack(fill=tk.X)
 
+        # Priority 7: Start / Stop Webcam Buttons
+        self.btn_start_cam = tk.Button(actions_row, text="Start Cam ▶", font=font_body, bg=fg_success, fg="#000000", activebackground="#05b88a", activeforeground="#000000", bd=0, padx=15, pady=8, command=self.start_webcam)
+        self.btn_start_cam.pack(side=tk.LEFT, padx=5)
+
+        self.btn_stop_cam = tk.Button(actions_row, text="Stop Cam ⏹", font=font_body, bg="#444455", fg=fg_text, activebackground=fg_danger, activeforeground=fg_text, bd=0, padx=15, pady=8, command=self.stop_webcam)
+        self.btn_stop_cam.pack(side=tk.LEFT, padx=5)
+
         self.speak = tk.Button(actions_row, text="Speak 🔊", font=font_body, bg=fg_accent, fg=fg_text, activebackground="#1e60ff", activeforeground=fg_text, bd=0, padx=20, pady=8, command=self.speak_fun)
         self.speak.pack(side=tk.RIGHT, padx=5)
 
@@ -209,21 +255,65 @@ class Application:
         self.word3 = " "
         self.word4 = " "
 
-        self.video_loop()
+        # Auto-start webcam on launch
+        self.start_webcam()
+
+    def start_webcam(self):
+        """Starts the webcam stream safely if not already running."""
+        if self.webcam_running:
+            return
+        try:
+            self.vs = cv2.VideoCapture(0)
+            if not self.vs.isOpened():
+                mb.showwarning("Webcam Warning", "Could not open webcam.")
+                return
+            self.webcam_running = True
+            self.prev_time = time.perf_counter()
+            self.video_loop()
+        except Exception as e:
+            print("Error starting webcam:", e)
+
+    def stop_webcam(self):
+        """Stops the webcam stream safely and releases hardware resources."""
+        self.webcam_running = False
+        if self.vs:
+            self.vs.release()
+            self.vs = None
+        self.panel.config(image='')
+        empty_white = np.ones((400, 400, 3), np.uint8) * 255
+        empty_img = ImageTk.PhotoImage(image=Image.fromarray(empty_white))
+        self.panel2.imgtk = empty_img
+        self.panel2.config(image=empty_img)
+        self.current_symbol = "-"
+        self.panel3.config(text="-")
+        self.fps_label.config(text="FPS: 0.0")
 
     def video_loop(self):
+        if not self.webcam_running or self.vs is None:
+            return
+
         try:
+            # Priority 5: High-precision FPS Calculation
+            curr_time = time.perf_counter()
+            dt = curr_time - self.prev_time
+            self.prev_time = curr_time
+            if dt > 0:
+                current_fps = 1.0 / dt
+                self.fps = 0.9 * self.fps + 0.1 * current_fps
+            self.fps_label.config(text=f"FPS: {self.fps:.1f}")
+
             ok, frame = self.vs.read()
             if not ok or frame is None:
                 print("Could not read frame from webcam.")
-                self.root.after(10, self.video_loop)
+                if self.webcam_running:
+                    self.root.after(10, self.video_loop)
                 return
 
             # Mirror frame
             cv2image = cv2.flip(frame, 1)
             cv2image_copy = np.array(cv2image)
 
-            # Detect hand on mirrored frame using draw=True and flipType=False (matches test_hand.py)
+            # Detect hand on mirrored frame
             hands, cv2image = self.hd.findHands(cv2image, draw=True, flipType=False)
             
             # Convert frame to RGB for Tkinter display
@@ -237,71 +327,9 @@ class Application:
 
             if hands:
                 hand = hands[0]
-                x, y, w, h = hand['bbox']
+                white, self.pts = draw_skeleton_canvas(hand, cv2image_copy.shape, offset=offset)
                 
-                # Safe crop bounds checking
-                frame_h, frame_w = cv2image_copy.shape[:2]
-                y1 = max(0, y - offset)
-                y2 = min(frame_h, y + h + offset)
-                x1 = max(0, x - offset)
-                x2 = min(frame_w, x + w + offset)
-
-                if (y2 - y1) > 0 and (x2 - x1) > 0:
-                    pts_original = hand['lmList']
-                    
-                    # Mathematically translate landmarks to cropped coordinate system
-                    self.pts = []
-                    for pt in pts_original:
-                        px = pt[0] - x1
-                        py = pt[1] - y1
-                        pz = pt[2]
-                        self.pts.append([px, py, pz])
-
-                    self.pts = [[int(pt[0]), int(pt[1]), int(pt[2])] for pt in self.pts]
-
-                    # Centering calculation offsets for 400x400 canvas (matching training data collection)
-                    os_val = int(((400 - w) // 2) - 15)
-                    os1_val = int(((400 - h) // 2) - 15)
-
-                    # Hand orientation handling (Left hand mirroring)
-                    # Mirror left-hand coordinates horizontally so they behave like a right hand
-                    is_left_hand = (hand.get("type", "Right") == "Left")
-                    if is_left_hand:
-                        for i in range(21):
-                            canvas_x = self.pts[i][0] + os_val
-                            mirrored_canvas_x = 400 - canvas_x
-                            self.pts[i][0] = mirrored_canvas_x - os_val
-
-                    # Generate dynamic white background
-                    white = np.ones((400, 400, 3), np.uint8) * 255
-
-                    # Draw hand skeleton lines
-                    for t in range(0, 4, 1):
-                        cv2.line(white, (self.pts[t][0] + os_val, self.pts[t][1] + os1_val), (self.pts[t + 1][0] + os_val, self.pts[t + 1][1] + os1_val),
-                                 (0, 255, 0), 3)
-                    for t in range(5, 8, 1):
-                        cv2.line(white, (self.pts[t][0] + os_val, self.pts[t][1] + os1_val), (self.pts[t + 1][0] + os_val, self.pts[t + 1][1] + os1_val),
-                                 (0, 255, 0), 3)
-                    for t in range(9, 12, 1):
-                        cv2.line(white, (self.pts[t][0] + os_val, self.pts[t][1] + os1_val), (self.pts[t + 1][0] + os_val, self.pts[t + 1][1] + os1_val),
-                                 (0, 255, 0), 3)
-                    for t in range(13, 16, 1):
-                        cv2.line(white, (self.pts[t][0] + os_val, self.pts[t][1] + os1_val), (self.pts[t + 1][0] + os_val, self.pts[t + 1][1] + os1_val),
-                                 (0, 255, 0), 3)
-                    for t in range(17, 20, 1):
-                        cv2.line(white, (self.pts[t][0] + os_val, self.pts[t][1] + os1_val), (self.pts[t + 1][0] + os_val, self.pts[t + 1][1] + os1_val),
-                                 (0, 255, 0), 3)
-                    
-                    cv2.line(white, (self.pts[5][0] + os_val, self.pts[5][1] + os1_val), (self.pts[9][0] + os_val, self.pts[9][1] + os1_val), (0, 255, 0), 3)
-                    cv2.line(white, (self.pts[9][0] + os_val, self.pts[9][1] + os1_val), (self.pts[13][0] + os_val, self.pts[13][1] + os1_val), (0, 255, 0), 3)
-                    cv2.line(white, (self.pts[13][0] + os_val, self.pts[13][1] + os1_val), (self.pts[17][0] + os_val, self.pts[17][1] + os1_val), (0, 255, 0), 3)
-                    cv2.line(white, (self.pts[0][0] + os_val, self.pts[0][1] + os1_val), (self.pts[5][0] + os_val, self.pts[5][1] + os1_val), (0, 255, 0), 3)
-                    cv2.line(white, (self.pts[0][0] + os_val, self.pts[0][1] + os1_val), (self.pts[17][0] + os_val, self.pts[17][1] + os1_val), (0, 255, 0), 3)
-
-                    # Draw red circles at joints
-                    for i in range(21):
-                        cv2.circle(white, (self.pts[i][0] + os_val, self.pts[i][1] + os1_val), 2, (0, 0, 255), 1)
-
+                if self.pts:
                     # Predict sign
                     self.predict(white)
                     raw_char = self.current_symbol
@@ -315,14 +343,20 @@ class Application:
             # If no hand was found or crop was invalid, reset symbols
             if not hands:
                 self.current_symbol = "-"
-                # Draw empty white canvas
                 empty_white = np.ones((400, 400, 3), np.uint8) * 255
                 self.current_image2 = Image.fromarray(empty_white)
                 imgtk2 = ImageTk.PhotoImage(image=self.current_image2)
                 self.panel2.imgtk = imgtk2
                 self.panel2.config(image=imgtk2)
 
-            self.panel3.config(text=self.current_symbol)
+            # Priority 4: Update display label with symbol + confidence percentage
+            if self.current_symbol in ["-", "blank"]:
+                disp_text = "-"
+            elif self.current_symbol == "Unknown":
+                disp_text = f"Unknown ({self.last_confidence:.1f}%)"
+            else:
+                disp_text = f"{self.current_symbol} ({self.last_confidence:.1f}%)"
+            self.panel3.config(text=disp_text)
 
             # Debouncing state machine for stable character prediction
             if hasattr(self, 'stability_slider'):
@@ -331,7 +365,7 @@ class Application:
             # Responsive threshold for control gestures like "next"
             current_threshold = self.stability_threshold
             if raw_char in ["next", "Next"]:
-                current_threshold = 3  # Highly responsive for Next gesture!
+                current_threshold = 3
 
             if raw_char == self.prev_raw_char:
                 self.consecutive_frames += 1
@@ -342,8 +376,8 @@ class Application:
             if self.consecutive_frames >= current_threshold:
                 stable_char = raw_char
                 if stable_char != self.last_appended_char:
-                    if stable_char == "blank":
-                        self.last_appended_char = "blank"
+                    if stable_char in ["blank", "Unknown"]:
+                        self.last_appended_char = stable_char
                     elif stable_char == " ":
                         self.str += " "
                         self.last_appended_char = stable_char
@@ -379,10 +413,13 @@ class Application:
                     print("TTS Iterate Error:", e)
 
             self.panel5.config(text=self.str)
-            self.root.after(10, self.video_loop)
+            if self.webcam_running:
+                self.root.after(10, self.video_loop)
         except Exception as e:
             print("Loop Error:", e)
-            self.root.after(10, self.video_loop)
+            if self.webcam_running:
+                self.root.after(10, self.video_loop)
+
 
     def distance(self, x, y):
         return math.sqrt(((x[0] - y[0]) ** 2) + ((x[1] - y[1]) ** 2))
@@ -492,6 +529,18 @@ class Application:
         white = test_image
         white = white.reshape(1, 400, 400, 3)
         prob = np.array(self.model.predict(white, verbose=0)[0], dtype='float32')
+        
+        # Priority 4: Calculate confidence percentage
+        max_prob = float(np.max(prob)) * 100.0
+        self.last_confidence = max_prob
+
+        if hasattr(self, 'conf_slider'):
+            self.confidence_threshold = float(self.conf_slider.get())
+
+        if max_prob < self.confidence_threshold:
+            self.current_symbol = "Unknown"
+            return
+
         ch1 = np.argmax(prob, axis=0)
         prob[ch1] = 0
         ch2 = np.argmax(prob, axis=0)
@@ -500,6 +549,7 @@ class Application:
         prob[ch3] = 0
 
         pl = [ch1, ch2]
+
 
         # condition for [Aemnst]
         l = [[5, 2], [5, 3], [3, 5], [3, 6], [3, 0], [3, 2], [6, 4], [6, 1], [6, 2], [6, 6], [6, 7], [6, 0], [6, 5],
@@ -938,6 +988,8 @@ class Application:
         cv2.destroyAllWindows()
 
 
-print("Starting Application...")
+if __name__ == "__main__":
+    print("Starting Application...")
+    app = Application()
+    app.root.mainloop()
 
-(Application()).root.mainloop()
